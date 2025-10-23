@@ -1,9 +1,17 @@
+import os
+
 import numpy as np
 import pandas as pd
 from pybaselines import Baseline
-from scipy.signal import savgol_filter, argrelmin
+from scipy.signal import savgol_filter
 import matplotlib.pyplot as plt
+from sklearn.cross_decomposition import PLSRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import root_mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVR
 
 
 def apply_savgol_to_df(df):
@@ -41,9 +49,6 @@ def apply_standardization(df):
         columns=df.columns
     )
 
-def read_data():
-    return pd.read_csv("data_nir_187_samples.csv")
-
 def handle_dataset_data(df):
     df = df.drop(df.columns[0], axis=1)
     return df.replace(',', '.', regex=True).astype(float)
@@ -54,11 +59,11 @@ def pre_processing(df):
     # df = apply_baseline_to_df(df) # does not make any sense
     # df = apply_standardization(df) # does not make any sense
     df = apply_snv(df) # change scales
-    df = apply_normalization(df) # invert the direction of signal
+    # df = apply_normalization(df) # invert the direction of signal
     return df
 
 
-def plot_row_graph(original, filtered):
+def plot_row_graph(original, filtered, dataset_name):
     plt.figure(figsize=(10, 5))
     plt.plot(original, label="Original", alpha=0.7)
     plt.plot(filtered, label="Filtered (Savitzky–Golay)", linewidth=2)
@@ -66,23 +71,63 @@ def plot_row_graph(original, filtered):
     plt.xlabel("Index")
     plt.ylabel("Value")
     plt.legend()
-    plt.savefig("filtered_row_0.png", dpi=300)
+    plt.savefig(f"filtered_{dataset_name}.png", dpi=300)
 
-def fit(df, model): ## just a example, needs a update
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    clf = svm.SVC(kernel='linear', C=1.0, random_state=42)
-    clf.fit(X_train_scaled, y_train)
-    y_pred = clf.predict(X_test_scaled)
-    accuracy = accuracy_score(y_test, y_pred)
+def split_data_train_test(df):
+    X = df.drop("result", axis=1)
+    y = df["result"]
+    return train_test_split(X, y, test_size=0.3, random_state=42)
+
+def fit(df, pipeline, dataset_name):
+    model = pipeline[0]
+    model_name = pipeline[1]
+    X_train, X_test, y_train, y_test = split_data_train_test(df)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    print(f"{model_name} | {dataset_name} | MSE: {root_mean_squared_error(y_test, y_pred)}")
+    print(f"{model_name} | {dataset_name} | R²: {r2_score(y_test, y_pred)}")
+
+def load_datasets(): ##TODO this func needs to load all the datasets with enough sample and return as array
+    files = os.listdir("generated_datasets")
+    return [f for f in files if "187_samples" in f]
+
+def create_pipelines():
+    pipeline_list = []
+    pipeline_list.append((Pipeline([
+        ('scaler', StandardScaler()),
+        ('svr', SVR(kernel='rbf', C=100, gamma=0.1))
+    ]), "SVR"))
+    pipeline_list.append((Pipeline([
+        ('scaler', StandardScaler()),
+        ('svr', PLSRegression())
+    ]), "PLSR"))
+    pipeline_list.append((Pipeline([
+        ('scaler', StandardScaler()),
+        ('svr', RandomForestRegressor())
+    ]), "RandomForest"))
+    return pipeline_list
+
+def svr_tunning(df):
+    X_train, X_test, y_train, y_test = split_data_train_test(df)
+    param1 = {'kernel': ('poly'), 'C': [1, 5], 'degree': [3, 5], 'gamma': ('auto', 'scale'), 'coef0': [0.01, 10, 0.5]}
+    param2 = {'kernel': ('linear', 'rbf', 'sigmoid'), 'C': [1, 5, 10], 'gamma': ('auto', 'scale')}
+    grid_search1 = GridSearchCV(SVR(), param1, cv=5)
+    grid_search2 = GridSearchCV(SVR(), param2, cv=5)
+    grid_search1.fit(X_train, y_train)
+    grid_search2.fit(X_train, y_train)
+    pass
+
+def random_forest_tuning():
+    pass
 
 if __name__ == '__main__':
-    df = read_data()
-    df = handle_dataset_data(df)
-    filtered_df = pre_processing(df)
-    original = df.iloc[2].values.astype(float)
-    filtered = filtered_df.iloc[2]
-    print(filtered)
-    plot_row_graph(original, filtered)
+        for dataset_name in load_datasets():
+            dataframe = pd.read_csv("./generated_datasets/" + dataset_name)
+            df = handle_dataset_data(dataframe)
+            filtered_df = pre_processing(df)
+            original = df.iloc[2].values.astype(float)
+            filtered = filtered_df.iloc[2]
+            pipelines = create_pipelines()
+            for pipeline in pipelines:
+                fit(filtered_df, pipeline, dataset_name)
+            plot_row_graph(original, filtered, dataset_name)

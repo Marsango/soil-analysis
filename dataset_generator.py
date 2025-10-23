@@ -20,10 +20,11 @@ def update_mean_by_sample(nir_rows):
     return nir_rows_with_mean_values
 
 def write_to_csv(element, sample_size, rows, headers):
-    headers.append(element)
-    with open(f"./generate_datasets/{element.split('(')[0]}_{sample_size}_samples", "w", newline="") as f:
+    new_headers = headers.copy()
+    new_headers.append("result")
+    with open(f"generated_datasets/{element.split('(')[0].strip()}_{sample_size}_samples.csv", "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(headers)
+        writer.writerow(new_headers)
         writer.writerows(rows)
 
 def generate_datasets(result_rows, nir_rows, headers):
@@ -32,7 +33,7 @@ def generate_datasets(result_rows, nir_rows, headers):
         dataset_lines = []
         # iterating over the lines of result_rows
         for j in range(1, len(result_rows)):
-            #if no value is provided we wont add to the dataset
+            #if no value is provided we won't add to the dataset
             if result_rows[j][i] != '0,00':
                 value = float(result_rows[j][i].replace(",", "."))
                 row = [result_rows[j][0]] + nir_rows[j - 1] + [value]
