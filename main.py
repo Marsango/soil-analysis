@@ -55,13 +55,14 @@ def handle_dataset_data(df):
     return df.replace(',', '.', regex=True).astype(float)
 
 def pre_processing(df):
-    df = df.copy()
-    df = apply_savgol_to_df(df) # seems good
-    # df = apply_baseline_to_df(df) # does not make any sense
-    # df = apply_standardization(df) # does not make any sense
-    df = apply_snv(df) # change scales
-    # df = apply_normalization(df) # invert the direction of signal
-    return df
+    y = df['result'].copy()
+    X = df.drop('result', axis=1)
+    filtered_X = apply_savgol_to_df(X) # seems good
+    filtered_X = apply_baseline_to_df(filtered_X) # does not make any sense
+    # df = apply_standardization(filtered_X) # does not make any sense
+    # filtered_X = apply_snv(filtered_X) # change scales
+    filtered_X = apply_normalization(filtered_X) # invert the direction of signal
+    return filtered_X, y
 
 
 def plot_row_graph(original, filtered, dataset_name):
@@ -74,35 +75,30 @@ def plot_row_graph(original, filtered, dataset_name):
     plt.legend()
     plt.savefig(f"filtered_{dataset_name}.png", dpi=300)
 
-def split_data_train_test(df):
-    X = df.drop("result", axis=1)
-    y = df["result"]
-    return train_test_split(X, y, test_size=0.2, random_state=42)
-
-def fit(df, pipeline):
+def fit(X, y, pipeline):
     model = pipeline[0]
     model_name = pipeline[1]
-    X_train, X_test, y_train, y_test = split_data_train_test(df)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
-    print(f"{model_name} | MSE: {root_mean_squared_error(y_test, y_pred)} | R²: {r2_score(y_test, y_pred)}")
+    print(f"{model_name} | RMSE: {root_mean_squared_error(y_test, y_pred)} | R²: {r2_score(y_test, y_pred)}")
 
 def load_datasets():
     files = os.listdir("generated_datasets")
-    return [f for f in files if "187_samples" in f]
+    return [f for f in files if "248_samples" in f]
 
-def create_pipelines(df):
+def create_pipelines(X, y):
     pipeline_list = []
-    pipeline_list.append((svr_tunning(df), "SVR"))
+    pipeline_list.append((svr_tunning(X, y), "SVR"))
     pipeline_list.append((Pipeline([
         ('scaler', StandardScaler()),
         ('plsr', PLSRegression())
     ]), "PLSR"))
-    pipeline_list.append((random_forest_tuning(df), "RandomForest"))
+    pipeline_list.append((random_forest_tuning(X, y), "RandomForest"))
     return pipeline_list
 
-def svr_tunning(df):
-    X_train, X_test, y_train, y_test = split_data_train_test(df)
+def svr_tunning(X, y):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     param1 = {
         'svr__kernel': ['poly'],
         'svr__C': [1, 5],
@@ -127,8 +123,8 @@ def svr_tunning(df):
     accuracy_best2 = r2_score(y_test, y_pred_best2)
     return grid_search1.best_estimator_ if accuracy_best1 > accuracy_best2 else grid_search2.best_estimator_
 
-def random_forest_tuning(df):
-    X_train, X_test, y_train, y_test = split_data_train_test(df)
+def random_forest_tuning(X, y):
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     param_dist = {
         'n_estimators': [100, 200],
         'max_features': ['sqrt', 0.8],
@@ -154,10 +150,10 @@ if __name__ == '__main__':
             print("\n--------------------" + dataset_name + "--------------------\n")
             dataframe = pd.read_csv("./generated_datasets/" + dataset_name)
             df = handle_dataset_data(dataframe)
-            filtered_df = pre_processing(df)
+            X, y = pre_processing(df)
             # original = df.iloc[2].values.astype(float)
             # filtered = filtered_df.iloc[2]
-            pipelines = create_pipelines(filtered_df)
+            pipelines = create_pipelines(X, y)
             for pipeline in pipelines:
-                fit(filtered_df, pipeline)
+                fit(X, y, pipeline)
             # plot_row_graph(original, filtered, dataset_name)
