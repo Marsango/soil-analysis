@@ -20,14 +20,15 @@ def update_mean_by_sample_result(result_rows):
     return nir_rows_with_mean_values
 
 def update_mean_by_sample_nir(nir_rows):
-    nir_rows_with_mean_values = []
+    nir_rows_with_mean_values = {}
     for i in range(1, len(nir_rows)):
         if i % 2 == 0: continue
         nir_sample_mean_value = []
         for j in range(1, len(nir_rows[i])):
             mean_value = (float(nir_rows[i][j].replace(",", ".")) + float(nir_rows[i + 1][j].replace(",", "."))) / 2
             nir_sample_mean_value.append(mean_value)
-        nir_rows_with_mean_values.append(nir_sample_mean_value)
+        sample_id = "".join(c for c in nir_rows[i][0] if c.isdigit())
+        nir_rows_with_mean_values[sample_id] = nir_sample_mean_value
     return nir_rows_with_mean_values
 
 def write_to_csv(element, sample_size, rows, headers):
@@ -38,6 +39,14 @@ def write_to_csv(element, sample_size, rows, headers):
         writer.writerow(new_headers)
         writer.writerows(rows)
 
+
+
+# i hate myself a lot because after 4 days hitting my head against the wall
+# trying to figure out whats wrong with my model (i cant even get a positive r2_score)
+# i figure out that the problem was
+# my parser because its was assuming that EVERY row in the results.csv was in the same
+# position of NIR CSV, which is true for some of rows of the beginning of the file but its
+# not true for the entire dataset.
 def generate_datasets(result_rows, nir_rows, headers):
     #iterate over the headers of results, ignoring the first (sample name)
     for i in range(1, len(result_rows[0])):
@@ -49,15 +58,19 @@ def generate_datasets(result_rows, nir_rows, headers):
                 value = result_rows[j][i]
                 if type(value) == str:
                     value = float(value.replace(",", "."))
-                row = [result_rows[j][0]] + nir_rows[j - 1] + [value]
+                row = []
+                row.append(result_rows[j][0])
+                sample_id = "".join(c for c in result_rows[j][0] if c.isdigit())
+                row.extend(nir_rows[sample_id])
+                row.append(value)
                 dataset_lines.append(row)
         write_to_csv(result_rows[0][i], len(dataset_lines), dataset_lines, headers)
 
 def handler():
     result_rows = read_csv('data_results.csv')
-    result_rows.extend(update_mean_by_sample_result(read_csv('data_results_2.csv'))[1:])
+    # result_rows.extend(update_mean_by_sample_result(read_csv('data_results_2.csv'))[1:])
     nir_rows = read_csv('data_nir_187_samples.csv')
-    nir_rows.extend(read_csv("data_nir_67_samples.csv")[1:])
+    # nir_rows.extend(read_csv("data_nir_67_samples.csv")[1:])
     nir_rows_means = update_mean_by_sample_nir(nir_rows)
     generate_datasets(result_rows, nir_rows_means, nir_rows[0])
 
