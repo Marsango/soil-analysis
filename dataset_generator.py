@@ -27,7 +27,8 @@ def update_mean_by_sample_nir(nir_rows):
         for j in range(1, len(nir_rows[i])):
             mean_value = (float(nir_rows[i][j].replace(",", ".")) + float(nir_rows[i + 1][j].replace(",", "."))) / 2
             nir_sample_mean_value.append(mean_value)
-        sample_id = "".join(c for c in nir_rows[i][0] if c.isdigit())
+        sample_prefix = "Amostra " if "amostra" in nir_rows[i][0].lower() else ""
+        sample_id = sample_prefix + "".join(c for c in nir_rows[i][0] if c.isdigit())
         nir_rows_with_mean_values[sample_id] = nir_sample_mean_value
     return nir_rows_with_mean_values
 
@@ -60,7 +61,8 @@ def generate_datasets(result_rows, nir_rows, headers):
                     value = float(value.replace(",", "."))
                 row = []
                 row.append(result_rows[j][0])
-                sample_id = "".join(c for c in result_rows[j][0] if c.isdigit())
+                sample_prefix = "Amostra " if "amostra" in result_rows[j][0].lower() else ""
+                sample_id = sample_prefix + "".join(c for c in result_rows[j][0] if c.isdigit())
                 row.extend(nir_rows[sample_id])
                 row.append(value)
                 dataset_lines.append(row)
@@ -68,9 +70,9 @@ def generate_datasets(result_rows, nir_rows, headers):
 
 def handler():
     result_rows = read_csv('data_results.csv')
-    # result_rows.extend(update_mean_by_sample_result(read_csv('data_results_2.csv'))[1:])
+    result_rows.extend(update_mean_by_sample_result(read_csv('data_results_2.csv'))[1:])
     nir_rows = read_csv('data_nir_187_samples.csv')
-    # nir_rows.extend(read_csv("data_nir_67_samples.csv")[1:])
+    nir_rows.extend(read_csv("data_nir_67_samples.csv")[1:])
     nir_rows_means = update_mean_by_sample_nir(nir_rows)
     generate_datasets(result_rows, nir_rows_means, nir_rows[0])
 

@@ -9,6 +9,7 @@ from scipy.signal import savgol_filter
 import matplotlib.pyplot as plt
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.ensemble import RandomForestRegressor, IsolationForest, GradientBoostingRegressor
+from sklearn.linear_model import ElasticNet
 from sklearn.metrics import root_mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline, make_pipeline
@@ -16,6 +17,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import RobustScaler
 from sklearn.svm import SVR
 from xgboost import XGBRegressor
+
+from VIPSelector import VIPSelector
 
 
 def apply_detrend(df):
@@ -94,18 +97,11 @@ def handle_dataset_data(df):
     #     if column != "result" and 950 < float(column.replace(",", ".")) > 1600:
     #         columns_to_drop.append(column)
     # df = df.drop(columns=columns_to_drop)
+    y = df['result'].copy()
+    X = df.drop('result', axis=1)
+    plot_row_graph(y, "result_raw")
+    plot_row_graph(X, "nir_raw")
     return df
-
-##https://github.com/scikit-learn/scikit-learn/issues/7050
-def calculate_vips(model):
-    t = model.x_scores_
-    w = model.x_weights_
-    q = model.y_loadings_
-    features_, _ = w.shape
-    inner_sum = np.diag(t.T @ t @ q.T @ q)
-    SS_total = np.sum(inner_sum)
-    vip = np.sqrt(features_*(w**2 @ inner_sum)/ SS_total)
-    return vip
 
 def pre_processing(X, params):
     # X = apply_detrend(X)
@@ -166,28 +162,48 @@ def load_datasets():
 
 def create_pipelines(X_train, y_train):
     pipeline_list = []
-    # svr_best_model = svr_tunning(X_train, y_train)
-    #
-    # # pipeline_list.append((svr_best_model, "SVR"))
-    # # pipeline_list.append((plsr_tunning(X_train, y_train), "PLSR"))
-    # # pipeline_list.append((random_forest_tuning(X_train, y_train), "RandomForest"))
-    # # pipeline_list.append((gbr_tuning(X_train, y_train), "GradientBoost"))
+    svr_best_model = svr_tuning(X_train, y_train)
+
+    pipeline_list.append((svr_best_model, "SVR"))
+    pipeline_list.append((plsr_tuning(X_train, y_train), "PLSR"))
+    pipeline_list.append((random_forest_tuning(X_train, y_train), "RandomForest"))
+    pipeline_list.append((gbr_tuning(X_train, y_train), "GradientBoost"))
     pipeline_list.append((xgb_tuning(X_train, y_train), "XGBoost"))
     return pipeline_list
 
-def plsr_tunning(X_train, y_train):
+def plsr_tuning(X_train, y_train):
+
+    pipeline = Pipeline([
+        ('scaler', RobustScaler()),
+        ('vip', VIPSelector()),
+        ('model', PLSRegression())
+    ])
+
     param_dist = {
-        'plsregression__n_components': [n for n in range(2, 21)],
+        'model__n_components': [5, 10, 15, 20],
+
+        'vip__n_components': [5, 10, 15, 20],
+        'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
-    search = GridSearchCV(make_pipeline(RobustScaler(), PLSRegression()), param_dist, cv=5, n_jobs=-1)
+    search = RandomizedSearchCV(
+        estimator=pipeline,
+        param_distributions=param_dist,
+        n_iter=15,
+        cv=5,
+        scoring='r2',
+        n_jobs=-1,
+        random_state=42
+    )
+
     search.fit(X_train, y_train)
     return search.best_estimator_
 
 
-def svr_tunning(X_train, y_train):
+def svr_tuning(X_train, y_train):
     pipe_svr = Pipeline([
         ('scaler', RobustScaler()),
+        ('vip', VIPSelector()),
         ('model', SVR())
     ])
 
@@ -217,22 +233,27 @@ def svr_tunning(X_train, y_train):
         print("Best SVR: linear")
         return search_linear.best_estimator_
 
-    search = GridSearchCV(pipe_svr, param_grid, cv=5, n_jobs=-1, scoring='r2')
-    search.fit(X_train, y_train)
-
-    print(f"Best SVR params: {search.best_params_}")
-    return search.best_estimator_
 
 def gbr_tuning(X_train, y_train):
+    pipeline = Pipeline([
+        ('scaler', RobustScaler()),
+        ('vip', VIPSelector()),
+        ('model', GradientBoostingRegressor(random_state=42))
+    ])
+
     param_dist = {
-        'n_estimators': [100, 200, 300, 500],
-        'learning_rate': [0.01, 0.05, 0.1],
-        'max_depth': [3, 5, 8, 10],
-        'subsample': [0.7, 0.9, 1.0],
-        'max_features': ['sqrt', 'log2', None]
+        'model__n_estimators': [100, 200, 300, 500],
+        'model__learning_rate': [0.01, 0.05, 0.1],
+        'model__max_depth': [3, 5, 8, 10],
+        'model__subsample': [0.7, 0.9, 1.0],
+        'model__max_features': ['sqrt', 'log2', None],
+
+        'vip__n_components': [5, 10, 15, 20],
+        'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
+
     search = RandomizedSearchCV(
-        estimator=GradientBoostingRegressor(random_state=42),
+        estimator=pipeline,
         param_distributions=param_dist,
         n_iter=15,
         cv=5,
@@ -244,16 +265,25 @@ def gbr_tuning(X_train, y_train):
     return search.best_estimator_
 
 def random_forest_tuning(X_train, y_train):
+    pipeline = Pipeline([
+        ('scaler', RobustScaler()),
+        ('vip', VIPSelector()),
+        ('model', RandomForestRegressor(random_state=42))
+    ])
+
     param_dist = {
-        'n_estimators': [100, 200, 300, 500],
-        'max_features': ['sqrt', 'log2', 0.8],
-        'max_depth': [10, 20, 30, None],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4]
+        'model__n_estimators': [100, 200, 300, 500],
+        'model__max_features': ['sqrt', 'log2', 0.8],
+        'model__max_depth': [10, 20, 30, None],
+        'model__min_samples_split': [2, 5, 10],
+        'model__min_samples_leaf': [1, 2, 4],
+
+        'vip__n_components': [5, 10, 15, 20],
+        'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     search = RandomizedSearchCV(
-        estimator=RandomForestRegressor(random_state=42),
+        estimator=pipeline,
         param_distributions=param_dist,
         n_iter=25,
         cv=5,
@@ -263,21 +293,28 @@ def random_forest_tuning(X_train, y_train):
     )
     search.fit(X_train, y_train)
     return search.best_estimator_
-
-from xgboost import XGBRegressor
 
 def xgb_tuning(X_train, y_train):
+    pipeline = Pipeline([
+        ('scaler', RobustScaler()),
+        ('vip', VIPSelector()),
+        ('model', XGBRegressor(random_state=42))
+    ])
+
     param_dist = {
-        'n_estimators': [100, 200, 300, 500],
-        'learning_rate': [0.01, 0.05, 0.1],
-        'max_depth': [3, 5, 7, 9],
-        'subsample': [0.7, 0.9, 1.0],
-        'colsample_bytree': [0.7, 0.9, 1.0],
-        'gamma': [0, 0.1, 0.2]
+        'model__n_estimators': [100, 200, 300, 500],
+        'model__learning_rate': [0.01, 0.05, 0.1],
+        'model__max_depth': [3, 5, 7, 9],
+        'model__subsample': [0.7, 0.9, 1.0],
+        'model__colsample_bytree': [0.7, 0.9, 1.0],
+        'model__gamma': [0, 0.1, 0.2],
+
+        'vip__n_components': [5, 10, 15, 20],
+        'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     search = RandomizedSearchCV(
-        estimator=XGBRegressor(random_state=42),
+        estimator=pipeline,
         param_distributions=param_dist,
         n_iter=25,
         cv=5,
@@ -289,6 +326,16 @@ def xgb_tuning(X_train, y_train):
     search.fit(X_train, y_train)
 
     return search.best_estimator_
+
+def remove_y_outliers(df):
+    q_low = df['result'].quantile(0.025)
+    q_high = df['result'].quantile(0.975)
+
+    df = df[(df['result'] >= q_low) & (df['result'] <= q_high)]
+    y = df['result'].copy()
+    X = df.drop('result', axis=1)
+    return X, y
+
 
 if __name__ == '__main__':
         for dataset_name in load_datasets():
@@ -299,59 +346,38 @@ if __name__ == '__main__':
             deriv = [0, 1, 2]
             best_r2 = {'params': {}, 'score': -10, "model": None}
             best_rmse = {'params': {}, 'score': 1000, "model": None}
-            # for w in window_size:
-            #     for p in poly_order:
-            #         for d in deriv:
-            try:
-                params = {"window_length": 31, "poly_order": 2, "deriv": 0}
-                print("\n--------------------" + dataset_name + "--------------------\n")
-                print(f"\n SG PARAMS: {params}")
-                dataframe = pd.read_csv("./generated_datasets/" + dataset_name, decimal='.')
-                df = handle_dataset_data(dataframe)
-                y = df['result'].copy()
-                X = df.drop('result', axis=1)
-                plot_row_graph(y, "result_raw")
-                plot_row_graph(X, "nir_raw")
+            for w in window_size:
+                for p in poly_order:
+                    for d in deriv:
+                        try:
+                            params = {"window_length": w, "poly_order": p, "deriv": d}
+                            print("\n--------------------" + dataset_name + "--------------------\n")
+                            print(f"\n SG PARAMS: {params}")
+                            dataframe = pd.read_csv("./generated_datasets/" + dataset_name, decimal='.')
+                            df = handle_dataset_data(dataframe)
+                            X, y = remove_y_outliers(df)
+                            X = pre_processing(X, params)
 
-                q_low = df['result'].quantile(0.025)
-                q_high = df['result'].quantile(0.975)
+                            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                            X_train, y_train = remove_outliers(X_train, y_train)
+                            print(X_train.shape)
+                            plot_row_graph(X_train, "train_data")
+                            plot_row_graph(X_test, "test_data")
 
-
-                df = df[(df['result'] >= q_low) & (df['result'] <= q_high)]
-                y = df['result'].copy()
-                X = df.drop('result', axis=1)
-                print(f"Shape after removing y-outliers: {df.shape}")
-                X = pre_processing(X, params)
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-                # scaler = RobustScaler()
-                # X_train = pd.DataFrame(scaler.fit_transform(X_train), columns=X_train.columns,
-                #                               index=X_train.index)
-                # X_test = pd.DataFrame(scaler.transform(X_test), columns=X_test.columns, index=X_test.index)
-                # plsr = plsr_tunning(X_train, y_train).named_steps['plsregression']
-                # vip_scores = calculate_vips(plsr)
-                # important_features_mask = vip_scores > 1
-                # X_train = X_train.loc[:, important_features_mask]
-                # X_test = X_test.loc[:, important_features_mask]
-
-                # X_train, y_train = remove_outliers(X_train, y_train)
-                print(X_train.shape)
-                plot_row_graph(X_train, "train_data")
-                plot_row_graph(X_test, "test_data")
-
-                pipelines = create_pipelines(X_train, y_train)
-                for pipeline in pipelines:
-                    rmse, r2 = fit(X_train, y_train, X_test, y_test, pipeline)
-                    if rmse < best_rmse["score"]:
-                        best_rmse["score"]  = rmse
-                        best_rmse["param"] = params
-                        best_rmse["model"] = pipeline[1]
-                    if r2 > best_r2["score"]:
-                        best_r2["score"]  = r2
-                        best_r2["param"] = params
-                        best_r2["model"] = pipeline[1]
-            except:
-                print(f"Error with parameters {params}")
-                traceback.print_exc()
-                continue
+                            pipelines = create_pipelines(X_train, y_train)
+                            for pipeline in pipelines:
+                                rmse, r2 = fit(X_train, y_train, X_test, y_test, pipeline)
+                                if rmse < best_rmse["score"]:
+                                    best_rmse["score"]  = rmse
+                                    best_rmse["param"] = params
+                                    best_rmse["model"] = pipeline[1]
+                                if r2 > best_r2["score"]:
+                                    best_r2["score"]  = r2
+                                    best_r2["param"] = params
+                                    best_r2["model"] = pipeline[1]
+                        except:
+                            print(f"Error with parameters {params}")
+                            traceback.print_exc()
+                            continue
             print(f"Best R2 score:  {best_r2}")
             print(f"Best RMSE score:  {best_rmse}")
