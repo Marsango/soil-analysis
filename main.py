@@ -1,93 +1,21 @@
 import os
-import traceback
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
-from pybaselines import Baseline
-from scipy.signal import savgol_filter
 import matplotlib.pyplot as plt
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.ensemble import RandomForestRegressor, IsolationForest, GradientBoostingRegressor
-from sklearn.linear_model import ElasticNet
-from sklearn.metrics import root_mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
-from sklearn.pipeline import Pipeline, make_pipeline
-from sklearn.decomposition import PCA
+from sklearn.model_selection import RandomizedSearchCV, KFold, cross_validate
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
 from sklearn.svm import SVR
 from xgboost import XGBRegressor
 
+from PreProcessor import Preprocessor
 from VIPSelector import VIPSelector
 
 
-def apply_detrend(df):
-
-    data = df.to_numpy(dtype=float)
-    n_samples, n_features = data.shape
-
-    x = np.arange(n_features)
-
-    output_data = np.zeros_like(data)
-
-    for i in range(n_samples):
-        row = data[i, :]
-        poly_coeffs = np.polyfit(x, row, 2)
-        baseline = np.polyval(poly_coeffs, x)
-        output_data[i, :] = row - baseline
-
-    return pd.DataFrame(output_data, columns=df.columns, index=df.index)
-
-def apply_msc(df, reference_spectrum=None, eps=1e-8):
-    data = df.to_numpy(dtype=float)
-    n_samples, n_wavelengths = data.shape
-
-    if reference_spectrum is None:
-        ref = data.mean(axis=0)
-    elif reference_spectrum == 'median':
-        ref = df.median(axis=0)
-
-    output_data = np.zeros_like(data, dtype=float)
-    for i in range(n_samples):
-        row = data[i, :].astype(float)
-        A = np.vstack([np.ones(n_wavelengths), ref]).T
-        coef, *_ = np.linalg.lstsq(A, row, rcond=None)
-        a, b = coef
-        if abs(b) < eps:
-            b = 1.0
-        output_data[i, :] = (row - a) / b
-
-    corrected_df = pd.DataFrame(output_data, columns=df.columns, index=df.index)
-    return corrected_df
-
-def apply_savgol_to_df(df, params):
-    data = df.to_numpy(dtype=float)
-    filtered = np.apply_along_axis(lambda x: savgol_filter(x, params["window_length"],
-                                                           params["poly_order"], deriv=params["deriv"]), 1, data)
-    return pd.DataFrame(filtered, columns=df.columns, index=df.index)
-
-def apply_baseline_to_df(df):
-    baseline_fitter = Baseline()
-    data = df.to_numpy(dtype=float)
-
-    corrected = np.zeros_like(data)
-    for i, row in enumerate(data):
-        baseline, _ = baseline_fitter.asls(row, lam=1e6, p=0.005)
-        corrected[i] = row - baseline
-
-    return pd.DataFrame(corrected, columns=df.columns, index=df.index)
-
-
-def apply_snv(df):
-    output_data = np.zeros_like(df, dtype=float)
-    for i in range(df.shape[0]):
-        row = df.iloc[i, :].to_numpy(dtype=float)
-        output_data[i, :] = (row - np.mean(row)) / np.std(row)
-    return pd.DataFrame(output_data, columns=df.columns, index=df.index)
-
-def apply_normalization(df):
-    fator = df.mean(axis=1)
-    return df.div(fator, axis=0)
 
 def handle_dataset_data(df):
     df = df.drop(df.columns[0], axis=1)
@@ -99,23 +27,9 @@ def handle_dataset_data(df):
     # df = df.drop(columns=columns_to_drop)
     y = df['result'].copy()
     X = df.drop('result', axis=1)
-    plot_row_graph(y, "result_raw")
-    plot_row_graph(X, "nir_raw")
+    plot_row_graph(y, "y_raw")
+    plot_row_graph(X, "X_raw")
     return df
-
-def pre_processing(X, params):
-    # X = apply_detrend(X)
-    # X = apply_baseline_to_df(X)
-    # X = apply_msc(X)# seems good
-    # X = apply_savgol_to_df(X, {'window_length': 5,
-    #                                     'poly_order': 4, 'deriv': 0})
-
-    # X = apply_baseline_to_df(X)
-    X = apply_snv(X)
-    X = apply_savgol_to_df(X, params)# change scales
-    # X = apply_normalization(X) # till the moment doesnt work well
-    return X
-
 
 def remove_outliers(X, y, contamination=0.05):
     iso = IsolationForest(
@@ -129,7 +43,6 @@ def remove_outliers(X, y, contamination=0.05):
 
     X_clean = X.loc[mask]
     y_clean = y.loc[mask]
-    print(f"Removed {np.sum(~mask)} outliers out of {len(mask)} samples")
     return X_clean, y_clean
 
 
@@ -146,162 +59,217 @@ def plot_row_graph(df, name):
     plt.title('Each Row of NumPy Array as a Line')
     plt.savefig(f"{name}.png", dpi=300)
 
-def fit(X_train, y_train, X_test, y_test, pipeline):
+
+def fit(X, y, pipeline, outer_cv):
     model = pipeline[0]
     model_name = pipeline[1]
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    rmse = root_mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-    print(f"{model_name} | RMSE: {rmse} | R²: {r2}")
-    return rmse, r2
+
+    scoring_metrics = {
+        'r2': 'r2',
+        'rmse': 'neg_root_mean_squared_error'
+    }
+
+    scores = cross_validate(model, X, y, cv=outer_cv,
+                            scoring=scoring_metrics, n_jobs=-1)
+    scores_r2 = scores['test_r2']
+    scores_rmse = scores['test_rmse']
+
+    r2_mean = scores_r2.mean()
+    r2_std = scores_r2.std()
+
+    rmse_mean = -scores_rmse.mean()
+    rmse_std = scores_rmse.std()
+
+    print(f"{model_name} | RMSE: mean: {rmse_mean:.4f} std: {rmse_std:.4f} | R²: mean: {r2_mean:.4f} std: {r2_std:.4f}")
+
+    return rmse_mean, r2_mean
 
 def load_datasets():
     files = os.listdir("generated_datasets")
     return [f for f in files if "187_samples" in f]
 
-def create_pipelines(X_train, y_train):
+def create_pipelines(inner_cv):
     pipeline_list = []
-    svr_best_model = svr_tuning(X_train, y_train)
+    svr_best_model = svr_tuning(inner_cv)
 
-    pipeline_list.append((svr_best_model, "SVR"))
-    pipeline_list.append((plsr_tuning(X_train, y_train), "PLSR"))
-    pipeline_list.append((random_forest_tuning(X_train, y_train), "RandomForest"))
-    pipeline_list.append((gbr_tuning(X_train, y_train), "GradientBoost"))
-    pipeline_list.append((xgb_tuning(X_train, y_train), "XGBoost"))
+    pipeline_list.extend(svr_best_model)
+    pipeline_list.append((plsr_tuning(inner_cv), "PLSR"))
+    pipeline_list.append((random_forest_tuning(inner_cv), "RandomForest"))
+    pipeline_list.append((gbr_tuning(inner_cv), "GradientBoost"))
+    pipeline_list.append((xgb_tuning(inner_cv), "XGBoost"))
     return pipeline_list
 
-def plsr_tuning(X_train, y_train):
+def plsr_tuning(inner_cv):
 
     pipeline = Pipeline([
+        # ('outlier_remover', OutlierRemover()),
+        ('preprocessor', Preprocessor()),
         ('scaler', RobustScaler()),
         ('vip', VIPSelector()),
         ('model', PLSRegression())
     ])
 
     param_dist = {
+        'preprocessor__scatter_correction': ['snv', 'msc', None],
+        'preprocessor__baseline_correction': ['asls', 'detrend', None],
+        'preprocessor__sg_window': [5, 11, 21, 31],
+        'preprocessor__sg_poly': [1, 2, 3, 4],
+        'preprocessor__sg_deriv': [0, 1, 2],
+
         'model__n_components': [5, 10, 15, 20],
 
-        'vip__n_components': [5, 10, 15, 20],
+        'vip__n_components': [5, 10, 15, 20, None],
         'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=15,
-        cv=5,
+        n_iter=50,
+        cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
         random_state=42
     )
 
-    search.fit(X_train, y_train)
-    return search.best_estimator_
+    return search
 
 
-def svr_tuning(X_train, y_train):
+def svr_tuning(inner_cv):
     pipe_svr = Pipeline([
+        # ('outlier_remover', OutlierRemover()),
+        ('preprocessor', Preprocessor()),
         ('scaler', RobustScaler()),
         ('vip', VIPSelector()),
         ('model', SVR())
     ])
 
     param_grid_rbf = {
+        'preprocessor__scatter_correction': ['snv', 'msc', None],
+        'preprocessor__baseline_correction': ['asls', 'detrend', None],
+        'preprocessor__sg_window': [5, 11, 21, 31],
+        'preprocessor__sg_poly': [1, 2, 3, 4],
+        'preprocessor__sg_deriv': [0, 1, 2],
+
         'model__kernel': ['rbf'],
         'model__C': np.logspace(-1, 3, 5),
-        'model__gamma': np.logspace(-4, 0, 5)
+        'model__gamma': np.logspace(-4, 0, 5),
+
+        'vip__n_components': [5, 10, 15, 20, None],
+        'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     param_grid_linear = {
+        'preprocessor__scatter_correction': ['snv', 'msc', None],
+        'preprocessor__baseline_correction': ['asls', 'detrend', None],
+        'preprocessor__sg_window': [5, 11, 21, 31],
+        'preprocessor__sg_poly': [1, 2, 3, 4],
+        'preprocessor__sg_deriv': [0, 1, 2],
+
         'model__kernel': ['linear'],
         'model__C': np.logspace(-3, 2, 6),
+        'vip__n_components': [5, 10, 15, 20, None],
+        'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
-    search_rbf = GridSearchCV(pipe_svr, param_grid_rbf, cv=5, n_jobs=-1, scoring='r2')
-    search_rbf.fit(X_train, y_train)
-
-    search_linear = GridSearchCV(pipe_svr, param_grid_linear, cv=5, n_jobs=-1, scoring='r2')
-    search_linear.fit(X_train, y_train)
-
-    print(f"Best SVR (RBF) params: {search_rbf.best_params_} (R2: {search_rbf.best_score_:.4f})")
-    print(f"Best SVR (Linear) params: {search_linear.best_params_} (R2: {search_linear.best_score_:.4f})")
-    if search_rbf.best_score_ > search_linear.best_score_:
-        print("Best SVR: rbf")
-        return search_rbf.best_estimator_
-    else:
-        print("Best SVR: linear")
-        return search_linear.best_estimator_
+    search_rbf = RandomizedSearchCV(pipe_svr, param_grid_rbf, cv=inner_cv, n_jobs=-1, scoring='r2', random_state=42, n_iter= 50)
+    search_linear = RandomizedSearchCV(pipe_svr, param_grid_linear, cv=inner_cv, n_jobs=-1, scoring='r2', random_state=42, n_iter= 50)
+    return (search_rbf, "SVR_RBF"), (search_linear, "SVR_linear")
 
 
-def gbr_tuning(X_train, y_train):
+def gbr_tuning(inner_cv):
     pipeline = Pipeline([
+        # ('outlier_remover', OutlierRemover()),
+        ('preprocessor', Preprocessor()),
         ('scaler', RobustScaler()),
         ('vip', VIPSelector()),
         ('model', GradientBoostingRegressor(random_state=42))
     ])
 
     param_dist = {
+        'preprocessor__scatter_correction': ['snv', 'msc', None],
+        'preprocessor__baseline_correction': ['asls', 'detrend', None],
+        'preprocessor__sg_window': [5, 11, 21, 31],
+        'preprocessor__sg_poly': [1, 2, 3, 4],
+        'preprocessor__sg_deriv': [0, 1, 2],
+
         'model__n_estimators': [100, 200, 300, 500],
         'model__learning_rate': [0.01, 0.05, 0.1],
         'model__max_depth': [3, 5, 8, 10],
         'model__subsample': [0.7, 0.9, 1.0],
         'model__max_features': ['sqrt', 'log2', None],
 
-        'vip__n_components': [5, 10, 15, 20],
+        'vip__n_components': [5, 10, 15, 20, None],
         'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=15,
-        cv=5,
+        n_iter=50,
+        cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
         random_state=42
     )
-    search.fit(X_train, y_train)
-    return search.best_estimator_
 
-def random_forest_tuning(X_train, y_train):
+    return search
+
+def random_forest_tuning(inner_cv):
     pipeline = Pipeline([
+        # ('outlier_remover', OutlierRemover()),
+        ('preprocessor', Preprocessor()),
         ('scaler', RobustScaler()),
         ('vip', VIPSelector()),
         ('model', RandomForestRegressor(random_state=42))
     ])
 
     param_dist = {
+        'preprocessor__scatter_correction': ['snv', 'msc', None],
+        'preprocessor__baseline_correction': ['asls', 'detrend', None],
+        'preprocessor__sg_window': [5, 11, 21, 31],
+        'preprocessor__sg_poly': [1, 2, 3, 4],
+        'preprocessor__sg_deriv': [0, 1, 2],
+
         'model__n_estimators': [100, 200, 300, 500],
         'model__max_features': ['sqrt', 'log2', 0.8],
         'model__max_depth': [10, 20, 30, None],
         'model__min_samples_split': [2, 5, 10],
         'model__min_samples_leaf': [1, 2, 4],
 
-        'vip__n_components': [5, 10, 15, 20],
+        'vip__n_components': [5, 10, 15, 20, None],
         'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=25,
-        cv=5,
+        n_iter=50,
+        cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
         random_state=42
     )
-    search.fit(X_train, y_train)
-    return search.best_estimator_
 
-def xgb_tuning(X_train, y_train):
+    return search
+
+def xgb_tuning(inner_cv):
     pipeline = Pipeline([
+        # ('outlier_remover', OutlierRemover()),
+        ('preprocessor', Preprocessor()),
         ('scaler', RobustScaler()),
         ('vip', VIPSelector()),
         ('model', XGBRegressor(random_state=42))
     ])
 
     param_dist = {
+        'preprocessor__scatter_correction': ['snv', 'msc', None],
+        'preprocessor__baseline_correction': ['asls', 'detrend', None],
+        'preprocessor__sg_window': [5, 11, 21, 31],
+        'preprocessor__sg_poly': [1, 2, 3, 4],
+        'preprocessor__sg_deriv': [0, 1, 2],
+
+        
         'model__n_estimators': [100, 200, 300, 500],
         'model__learning_rate': [0.01, 0.05, 0.1],
         'model__max_depth': [3, 5, 7, 9],
@@ -309,23 +277,21 @@ def xgb_tuning(X_train, y_train):
         'model__colsample_bytree': [0.7, 0.9, 1.0],
         'model__gamma': [0, 0.1, 0.2],
 
-        'vip__n_components': [5, 10, 15, 20],
+        'vip__n_components': [5, 10, 15, 20, None],
         'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=25,
-        cv=5,
+        n_iter=50,
+        cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
         random_state=42
     )
 
-    search.fit(X_train, y_train)
-
-    return search.best_estimator_
+    return search
 
 def remove_y_outliers(df):
     q_low = df['result'].quantile(0.025)
@@ -346,38 +312,23 @@ if __name__ == '__main__':
             deriv = [0, 1, 2]
             best_r2 = {'params': {}, 'score': -10, "model": None}
             best_rmse = {'params': {}, 'score': 1000, "model": None}
-            for w in window_size:
-                for p in poly_order:
-                    for d in deriv:
-                        try:
-                            params = {"window_length": w, "poly_order": p, "deriv": d}
-                            print("\n--------------------" + dataset_name + "--------------------\n")
-                            print(f"\n SG PARAMS: {params}")
-                            dataframe = pd.read_csv("./generated_datasets/" + dataset_name, decimal='.')
-                            df = handle_dataset_data(dataframe)
-                            X, y = remove_y_outliers(df)
-                            X = pre_processing(X, params)
-
-                            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-                            X_train, y_train = remove_outliers(X_train, y_train)
-                            print(X_train.shape)
-                            plot_row_graph(X_train, "train_data")
-                            plot_row_graph(X_test, "test_data")
-
-                            pipelines = create_pipelines(X_train, y_train)
-                            for pipeline in pipelines:
-                                rmse, r2 = fit(X_train, y_train, X_test, y_test, pipeline)
-                                if rmse < best_rmse["score"]:
-                                    best_rmse["score"]  = rmse
-                                    best_rmse["param"] = params
-                                    best_rmse["model"] = pipeline[1]
-                                if r2 > best_r2["score"]:
-                                    best_r2["score"]  = r2
-                                    best_r2["param"] = params
-                                    best_r2["model"] = pipeline[1]
-                        except:
-                            print(f"Error with parameters {params}")
-                            traceback.print_exc()
-                            continue
+            dataframe = pd.read_csv("./generated_datasets/" + dataset_name, decimal='.')
+            print("\n--------------------" + dataset_name + "--------------------\n")
+            df = handle_dataset_data(dataframe)
+            X_raw, y_raw = remove_y_outliers(df)
+            # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+            # X_train, y_train = remove_outliers(X_train, y_train)
+            # print(X_train.shape)
+            # plot_row_graph(X_raw, "train_data")
+            # plot_row_graph(y_raw, "test_data")
+            ## TODO custom folding to allow outlier removal
+            ## TODO stacking
+            ## TODO try RFECV for non-linear models
+            ## TODO instead of randomizedsearch for tuning try to use bayesian optimization (optuna)
+            outer_cv = KFold(n_splits=5, shuffle=True, random_state=42)
+            inner_cv = KFold(n_splits=5, shuffle=True, random_state=123)
+            pipelines = create_pipelines(inner_cv)
+            for pipeline in pipelines:
+                rmse, r2 = fit(X_raw, y_raw, pipeline, outer_cv)
             print(f"Best R2 score:  {best_r2}")
             print(f"Best RMSE score:  {best_rmse}")

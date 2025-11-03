@@ -12,6 +12,8 @@ class VIPSelector(BaseEstimator, TransformerMixin):
         self.selected_mask_ = None
 
     def fit(self, X, y):
+        if self.n_components is None:
+            return self
         self.scaler_ = RobustScaler()
         X_ = self.scaler_.fit_transform(X)
         pls = PLSRegression(n_components=self.n_components)
@@ -27,6 +29,8 @@ class VIPSelector(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        if self.n_components is None:
+            return X
         if isinstance(X, pd.DataFrame):
             return X.iloc[:, self.selected_mask_]
         else:
