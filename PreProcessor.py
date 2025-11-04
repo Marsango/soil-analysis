@@ -69,8 +69,9 @@ def apply_savgol_to_df(df, params):
 
 class Preprocessor(BaseEstimator, TransformerMixin):
     def __init__(self, scatter_correction='snv', baseline_correction=None,
-                 sg_window=5, sg_poly=2, sg_deriv=0):
+                 sg_window=5, sg_poly=2, sg_deriv=0, sg_enabled=True):
         self.scatter_correction = scatter_correction
+        self.sg_enabled = sg_enabled
         self.baseline_correction = baseline_correction
         self.sg_window = sg_window
         self.sg_poly = sg_poly
@@ -94,6 +95,9 @@ class Preprocessor(BaseEstimator, TransformerMixin):
             X_processed = apply_asls_baseline_to_df(X_processed)
         elif self.baseline_correction == 'detrend':
             X_processed = apply_detrend(X_processed)
+
+        if self.sg_enabled:
+            return X_processed
 
         params = {"window_length": self.sg_window,
                   "poly_order": self.sg_poly,

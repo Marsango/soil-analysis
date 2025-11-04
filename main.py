@@ -125,7 +125,7 @@ def plsr_tuning(inner_cv):
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=50,
+        n_iter=500,
         cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
@@ -172,8 +172,8 @@ def svr_tuning(inner_cv):
         'vip__vip_threshold': [0.8, 0.9, 1, 1.1]
     }
 
-    search_rbf = RandomizedSearchCV(pipe_svr, param_grid_rbf, cv=inner_cv, n_jobs=-1, scoring='r2', random_state=42, n_iter= 50)
-    search_linear = RandomizedSearchCV(pipe_svr, param_grid_linear, cv=inner_cv, n_jobs=-1, scoring='r2', random_state=42, n_iter= 50)
+    search_rbf = RandomizedSearchCV(pipe_svr, param_grid_rbf, cv=inner_cv, n_jobs=-1, scoring='r2', random_state=42, n_iter=500)
+    search_linear = RandomizedSearchCV(pipe_svr, param_grid_linear, cv=inner_cv, n_jobs=-1, scoring='r2', random_state=42, n_iter=500)
     return (search_rbf, "SVR_RBF"), (search_linear, "SVR_linear")
 
 
@@ -206,7 +206,7 @@ def gbr_tuning(inner_cv):
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=50,
+        n_iter=500,
         cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
@@ -244,7 +244,7 @@ def random_forest_tuning(inner_cv):
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=50,
+        n_iter=500,
         cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
@@ -284,7 +284,7 @@ def xgb_tuning(inner_cv):
     search = RandomizedSearchCV(
         estimator=pipeline,
         param_distributions=param_dist,
-        n_iter=50,
+        n_iter=500,
         cv=inner_cv,
         scoring='r2',
         n_jobs=-1,
@@ -321,10 +321,8 @@ if __name__ == '__main__':
             # print(X_train.shape)
             # plot_row_graph(X_raw, "train_data")
             # plot_row_graph(y_raw, "test_data")
-            ## TODO custom folding to allow outlier removal
             ## TODO stacking
             ## TODO try RFECV for non-linear models
-            ## TODO instead of randomizedsearch for tuning try to use bayesian optimization (optuna)
             outer_cv = KFold(n_splits=5, shuffle=True, random_state=42)
             inner_cv = KFold(n_splits=5, shuffle=True, random_state=123)
             pipelines = create_pipelines(inner_cv)
