@@ -3,7 +3,7 @@ import time
 import optuna
 import numpy as np
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, RepeatedKFold
 from sklearn.preprocessing import RobustScaler
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.svm import SVR
@@ -20,14 +20,23 @@ from main import handle_dataset_data, remove_y_outliers, remove_outliers
 
 def create_common_pipeline_steps(trial):
     scatter_corr = trial.suggest_categorical('scatter_correction', ['snv', 'msc', None])
-    baseline_corr = trial.suggest_categorical('baseline_correction', ['asls', 'detrend', None])
+    baseline_or_cr = trial.suggest_categorical('baseline_mode', ['baseline', 'cr', None])
+
+    baseline_corr = None
+    continuum_rem = False
+
+    if baseline_or_cr == 'baseline':
+        baseline_corr = trial.suggest_categorical('baseline_correction', ['asls', 'detrend', None])
+    elif baseline_or_cr == 'cr':
+        continuum_rem = True
+
 
     sg_window = trial.suggest_categorical('sg_window', [5, 11, 21, 31])
     sg_poly = trial.suggest_int('sg_poly', 1, 4)
     sg_deriv = trial.suggest_int('sg_deriv', 0, 2)
     sg_enabled = trial.suggest_categorical('sg_enable', [True, False])
 
-    if sg_poly <= sg_deriv:
+    if sg_poly < sg_deriv:
         raise optuna.exceptions.TrialPruned()
 
     vip_comp = trial.suggest_categorical('vip_n_components', [5, 10, 15, 20, None])
@@ -39,7 +48,8 @@ def create_common_pipeline_steps(trial):
         sg_window=sg_window,
         sg_poly=sg_poly,
         sg_deriv=sg_deriv,
-        sg_enabled=sg_enabled
+        sg_enabled=sg_enabled,
+        continuum_removal=continuum_rem
     )
 
     scaler = RobustScaler()
@@ -49,15 +59,18 @@ def create_common_pipeline_steps(trial):
         vip_threshold=vip_thresh
     )
 
-    return [
-        ('preprocessor', preprocessor),
-        ('scaler', scaler),
-        ('vip', vip)
-    ]
+    raw_pipeline = [('preprocessor', preprocessor)]
+    enable_scaler = trial.suggest_categorical('enable_scaler', [True, False])
+    if enable_scaler:
+        raw_pipeline.append(('scaler', scaler))
+
+    raw_pipeline.append(('vip', vip))
+
+    return raw_pipeline
 
 
-def run_cv_for_trial(pipeline, trial, should_remove_outliers):
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+def run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination):
+    kf = RepeatedKFold(n_splits=5, n_repeats=3, random_state=42)
 
     scores = []
 
@@ -68,7 +81,7 @@ def run_cv_for_trial(pipeline, trial, should_remove_outliers):
         y_train, y_test = y_raw.iloc[train_idx], y_raw.iloc[test_idx]
 
         if should_remove_outliers:
-            X_train, y_train = remove_outliers(X_train, y_train)
+            X_train, y_train = remove_outliers(X_train, y_train, contamination)
 
         try:
             pipeline_clone.fit(X_train, y_train)
@@ -96,12 +109,16 @@ def objective_plsr(trial):
 
     n_components = trial.suggest_categorical('n_components', [5, 10, 15, 20])
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
-
+    contamination = 0.05
+    if should_remove_outliers:
+        contamination = trial.suggest_float('contamination', 0.01, 0.2)
     model = PLSRegression(n_components=n_components)
     pipeline_steps.append(('model', model))
 
     pipeline = Pipeline(pipeline_steps)
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers)
+
+
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
 def objective_svr(trial):
@@ -109,7 +126,9 @@ def objective_svr(trial):
 
     kernel = trial.suggest_categorical('kernel', ['rbf', 'linear'])
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
-
+    contamination = 0.05
+    if should_remove_outliers:
+        contamination = trial.suggest_float('contamination', 0.01, 0.2)
     model_params = {'kernel': kernel}
 
     if kernel == 'rbf':
@@ -122,14 +141,19 @@ def objective_svr(trial):
     model = SVR(**model_params)
     pipeline_steps.append(('model', model))
 
+
     pipeline = Pipeline(pipeline_steps)
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers)
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
 def objective_gbr(trial):
     pipeline_steps = create_common_pipeline_steps(trial)
 
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
+    contamination = 0.05
+    if should_remove_outliers:
+        contamination = trial.suggest_float('contamination', 0.01, 0.2)
+
     n_estimators = trial.suggest_categorical('n_estimators', [100, 200, 300, 500])
     learning_rate = trial.suggest_categorical('learning_rate', [0.01, 0.05, 0.1])
     max_depth = trial.suggest_categorical('max_depth', [3, 5, 8, 10])
@@ -146,14 +170,18 @@ def objective_gbr(trial):
     )
     pipeline_steps.append(('model', model))
 
+
     pipeline = Pipeline(pipeline_steps)
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers)
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
 def objective_rf(trial):
     pipeline_steps = create_common_pipeline_steps(trial)
 
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
+    contamination = 0.05
+    if should_remove_outliers:
+        contamination = trial.suggest_float('contamination', 0.01, 0.2)
     n_estimators = trial.suggest_categorical('n_estimators', [100, 200, 300, 500])
     max_features = trial.suggest_categorical('max_features', ['sqrt', 'log2', 0.8])
     max_depth = trial.suggest_categorical('max_depth', [10, 20, 30, None])
@@ -171,14 +199,18 @@ def objective_rf(trial):
     )
     pipeline_steps.append(('model', model))
 
+
     pipeline = Pipeline(pipeline_steps)
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers)
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
 def objective_xgb(trial):
     pipeline_steps = create_common_pipeline_steps(trial)
 
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
+    contamination = 0.05
+    if should_remove_outliers:
+        contamination = trial.suggest_float('contamination', 0.01, 0.2)
     n_estimators = trial.suggest_categorical('n_estimators', [100, 200, 300, 500])
     learning_rate = trial.suggest_categorical('learning_rate', [0.01, 0.05, 0.1])
     max_depth = trial.suggest_categorical('max_depth', [3, 5, 7, 9])
@@ -199,26 +231,51 @@ def objective_xgb(trial):
     pipeline_steps.append(('model', model))
 
     pipeline = Pipeline(pipeline_steps)
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers)
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
 def run_all_model_studies(n_trials_per_model=100):
     model_objectives = {
-        "PLSR": objective_plsr,
-        "SVR": objective_svr,
-        "GradientBoosting": objective_gbr,
-        "RandomForest": objective_rf,
-        "XGBoost": objective_xgb
+        "PLSR": {"function": objective_plsr, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 31, 'sg_poly': 2, 'sg_deriv': 1, 'sg_enable': False, 'vip_n_components': None,
+                              'vip_vip_threshold': 0.8725998180281626, 'n_components': 5, 'remove_outliers': False,
+                              'contamination': 0.05, 'baseline_mode': None, 'enable_scaler': True}
+                 },
+        "SVR": {"function": objective_svr, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 5, 'sg_poly': 3, 'sg_deriv': 1,
+     'sg_enable': True, 'vip_n_components': 10, 'vip_vip_threshold': 1.0005199201746844, 'kernel': 'rbf',
+     'remove_outliers': True, 'C': 784.0639137178465, 'gamma': 0.00010631666741666417,
+                              'contamination': 0.05, 'baseline_mode': None, 'enable_scaler': True}
+                },
+        "GradientBoosting": {"function": objective_gbr, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 11,
+                              'sg_poly': 3, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 20,
+                              'vip_vip_threshold': 0.9348559509211628, 'remove_outliers': True,
+                              'n_estimators': 500, 'learning_rate': 0.05, 'max_depth': 3,
+                              'subsample': 0.9, 'max_features': 'log2', 'contamination': 0.05,
+                              'baseline_mode': None, 'enable_scaler': True}
+                             },
+        "RandomForest": {"function": objective_rf, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 11,
+                              'sg_poly': 4, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 10,
+                              'vip_vip_threshold': 0.9241278894976066, 'remove_outliers': False,
+                              'n_estimators': 100, 'max_features': 'log2', 'max_depth': 10,
+                              'min_samples_split': 5, 'min_samples_leaf': 1, 'contamination': 0.05,
+                              'baseline_mode': None, 'enable_scaler': True}
+                         },
+        "XGBoost": {"function": objective_xgb, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 5, 'sg_poly': 2,
+                              'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 10,
+                              'vip_vip_threshold': 0.9336065598099277, 'remove_outliers': False,
+                               'n_estimators': 300, 'learning_rate': 0.1, 'max_depth': 5, 'subsample': 0.7,
+                              'colsample_bytree': 0.7, 'gamma': 0.2, 'contamination': 0.05,
+                              'baseline_mode': None, 'enable_scaler': True}},
     }
 
     all_studies = {}
 
     for model_name, objective_func in model_objectives.items():
         print(f"Running study for {model_name}")
-        pruner = optuna.pruners.MedianPruner(n_warmup_steps=3)
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=6)
 
         study = optuna.create_study(direction='maximize', pruner=pruner)
-        study.optimize(objective_func, n_trials=n_trials_per_model, show_progress_bar=True)
+        study.enqueue_trial(objective_func["best_knowed_parameters"])
+        study.optimize(objective_func["function"], n_trials=n_trials_per_model, show_progress_bar=True, n_jobs=-1)
         all_studies[model_name] = study
 
         print(f"Best {model_name}  r²: {study.best_value:.4f}\n")
@@ -226,7 +283,7 @@ def run_all_model_studies(n_trials_per_model=100):
     print("Best r² scores:")
     for model_name, study in all_studies.items():
         print(f"  {model_name}: {study.best_value:.4f}")
-
+        print(f"    Best Params: {study.best_params}")
     return all_studies
 
 
@@ -235,7 +292,15 @@ if __name__ == "__main__":
     dataframe = pd.read_csv("./generated_datasets/MO_187_samples.csv", decimal='.')
     df = handle_dataset_data(dataframe)
     X_raw, y_raw = remove_y_outliers(df)
+
     completed_studies = run_all_model_studies(n_trials_per_model=2000)
     end = time.time()
     elapsed = end - start
     print(f"Time elapsed: {elapsed}s")
+
+
+    #rfecv
+    #data augmentation
+    #try both datasets again
+    #spend more time in pH
+

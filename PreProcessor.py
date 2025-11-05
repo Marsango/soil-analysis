@@ -4,6 +4,28 @@ from sklearn.base import BaseEstimator, TransformerMixin
 import pandas as pd
 import numpy as np
 
+# Add this function alongside your other apply_... functions
+from scipy.spatial import ConvexHull
+
+
+def apply_continuum_removal(df):
+    data = df.to_numpy(dtype=float)
+    output_data = np.zeros_like(data)
+    wavelengths = np.arange(data.shape[1])
+
+    for i in range(data.shape[0]):
+        spectrum = data[i, :]
+
+        hull_points = ConvexHull(np.vstack((wavelengths, -spectrum)).T)
+
+        upper_hull_indices = hull_points.vertices
+        upper_hull_indices = upper_hull_indices[np.argsort(wavelengths[upper_hull_indices])]
+
+        hull_line = np.interp(wavelengths, wavelengths[upper_hull_indices], spectrum[upper_hull_indices])
+        output_data[i, :] = spectrum / (hull_line + 1e-8)
+
+    return pd.DataFrame(output_data, columns=df.columns, index=df.index)
+
 def apply_detrend(df):
 
     data = df.to_numpy(dtype=float)
@@ -69,10 +91,12 @@ def apply_savgol_to_df(df, params):
 
 class Preprocessor(BaseEstimator, TransformerMixin):
     def __init__(self, scatter_correction='snv', baseline_correction=None,
-                 sg_window=5, sg_poly=2, sg_deriv=0, sg_enabled=True):
+                 sg_window=5, sg_poly=2, sg_deriv=0, sg_enabled=True,
+                 continuum_removal=False):
         self.scatter_correction = scatter_correction
         self.sg_enabled = sg_enabled
         self.baseline_correction = baseline_correction
+        self.continuum_removal = continuum_removal
         self.sg_window = sg_window
         self.sg_poly = sg_poly
         self.sg_deriv = sg_deriv
@@ -86,6 +110,10 @@ class Preprocessor(BaseEstimator, TransformerMixin):
 
         X_processed = X.copy()
 
+
+        if self.continuum_removal:
+            X_processed = apply_continuum_removal(X_processed)
+
         if self.scatter_correction == 'snv':
             X_processed = apply_snv(X_processed)
         elif self.scatter_correction == 'msc':
@@ -96,7 +124,7 @@ class Preprocessor(BaseEstimator, TransformerMixin):
         elif self.baseline_correction == 'detrend':
             X_processed = apply_detrend(X_processed)
 
-        if self.sg_enabled:
+        if not self.sg_enabled:
             return X_processed
 
         params = {"window_length": self.sg_window,

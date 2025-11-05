@@ -1,0 +1,30 @@
+Best XGBoost  r²: 0.5612
+
+Best r² scores:
+  PLSR: 0.4310
+    Best Params: {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 31, 'sg_poly': 2, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': None, 'vip_vip_threshold': 0.8725998180281626, 'n_components': 5, 'remove_outliers': False}
+  SVR: 0.4533
+    Best Params: {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 5, 'sg_poly': 3, 'sg_deriv': 1, 'sg_enable': False, 'vip_n_components': 10, 'vip_vip_threshold': 1.0005199201746844, 'kernel': 'rbf', 'remove_outliers': True, 'C': 784.0639137178465, 'gamma': 0.00010631666741666417}
+  GradientBoosting: 0.5596
+    Best Params: {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 11, 'sg_poly': 3, 'sg_deriv': 1, 'sg_enable': False, 'vip_n_components': 20, 'vip_vip_threshold': 0.9348559509211628, 'remove_outliers': True, 'n_estimators': 500, 'learning_rate': 0.05, 'max_depth': 3, 'subsample': 0.9, 'max_features': 'log2'}
+  RandomForest: 0.5019
+    Best Params: {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 11, 'sg_poly': 4, 'sg_deriv': 1, 'sg_enable': False, 'vip_n_components': 10, 'vip_vip_threshold': 0.9241278894976066, 'remove_outliers': False, 'n_estimators': 100, 'max_features': 'log2', 'max_depth': 10, 'min_samples_split': 5, 'min_samples_leaf': 1}
+  XGBoost: 0.5612
+    Best Params: {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 5, 'sg_poly': 2, 'sg_deriv': 1, 'sg_enable': False, 'vip_n_components': 10, 'vip_vip_threshold': 0.9336065598099277, 'remove_outliers': False, 'n_estimators': 300, 'learning_rate': 0.1, 'max_depth': 5, 'subsample': 0.7, 'colsample_bytree': 0.7, 'gamma': 0.2}
+Time elapsed: 5752.825214385986s
+
+
+
+Best XGBoost  r²: 0.5206
+
+Best r² scores:
+  PLSR: 0.4263
+    Best Params: {'scatter_correction': None, 'baseline_mode': None, 'sg_window': 5, 'sg_poly': 1, 'sg_deriv': 0, 'sg_enable': True, 'vip_n_components': None, 'vip_vip_threshold': 0.8161856193314605, 'enable_scaler': True, 'n_components': 5, 'remove_outliers': False}
+  SVR: 0.4350
+    Best Params: {'scatter_correction': None, 'baseline_mode': None, 'sg_window': 5, 'sg_poly': 3, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 10, 'vip_vip_threshold': 1.0005199201746844, 'enable_scaler': True, 'kernel': 'rbf', 'remove_outliers': True, 'contamination': 0.05, 'C': 784.0639137178465, 'gamma': 0.00010631666741666417}
+  GradientBoosting: 0.5284
+    Best Params: {'scatter_correction': None, 'baseline_mode': None, 'sg_window': 11, 'sg_poly': 3, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 20, 'vip_vip_threshold': 0.9348559509211628, 'enable_scaler': True, 'remove_outliers': True, 'contamination': 0.05, 'n_estimators': 500, 'learning_rate': 0.05, 'max_depth': 3, 'subsample': 0.9, 'max_features': 'log2'}
+  RandomForest: 0.5032
+    Best Params: {'scatter_correction': None, 'baseline_mode': None, 'sg_window': 31, 'sg_poly': 4, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 10, 'vip_vip_threshold': 0.8139189993723143, 'enable_scaler': True, 'remove_outliers': False, 'n_estimators': 100, 'max_features': 'sqrt', 'max_depth': 20, 'min_samples_split': 2, 'min_samples_leaf': 1}
+  XGBoost: 0.5206
+    Best Params: {'scatter_correction': None, 'baseline_mode': None, 'sg_window': 31, 'sg_poly': 2, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 20, 'vip_vip_threshold': 0.9096566076026066, 'enable_scaler': False, 'remove_outliers': True, 'contamination': 0.012823616981849952, 'n_estimators': 200, 'learning_rate': 0.05, 'max_depth': 3, 'subsample': 0.7, 'colsample_bytree': 1.0, 'gamma': 0.2}
