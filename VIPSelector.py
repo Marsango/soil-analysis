@@ -6,7 +6,7 @@ from sklearn.preprocessing import RobustScaler
 
 ## based in ##https://github.com/scikit-learn/scikit-learn/issues/7050
 class VIPSelector(BaseEstimator, TransformerMixin):
-    def __init__(self, n_components=10, vip_threshold=1.0):
+    def __init__(self, n_components=20, vip_threshold=0.9):
         self.n_components = n_components
         self.vip_threshold = vip_threshold
         self.selected_mask_ = None

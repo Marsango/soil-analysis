@@ -2,6 +2,7 @@ import traceback
 import time
 import optuna
 import numpy as np
+from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import KFold, RepeatedKFold
 from sklearn.metrics import root_mean_squared_error
@@ -12,6 +13,7 @@ from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.base import clone
 from xgboost import XGBRegressor
 import matplotlib.pyplot as plt
+from joblib import Memory
 
 from PreProcessor import Preprocessor
 from VIPSelector import VIPSelector
@@ -22,43 +24,43 @@ from main import handle_dataset_data, remove_y_outliers, remove_outliers
 
 def create_common_pipeline_steps(trial):
     scatter_corr = trial.suggest_categorical('scatter_correction', ['snv', 'msc', None])
-    baseline_or_cr = trial.suggest_categorical('baseline_mode', ['baseline', 'cr', None])
+    # baseline_or_cr = trial.suggest_categorical('baseline_mode', ['baseline', 'cr', None])
+    #
+    # baseline_corr = None
+    # continuum_rem = False
+    #
+    # if baseline_or_cr == 'baseline':
+    #     baseline_corr = trial.suggest_categorical('baseline_correction', ['asls', 'detrend', None])
+    # elif baseline_or_cr == 'cr':
+    #     continuum_rem = True
 
-    baseline_corr = None
-    continuum_rem = False
 
-    if baseline_or_cr == 'baseline':
-        baseline_corr = trial.suggest_categorical('baseline_correction', ['asls', 'detrend', None])
-    elif baseline_or_cr == 'cr':
-        continuum_rem = True
-
-
-    sg_window = trial.suggest_categorical('sg_window', [5, 11, 21, 31])
-    sg_poly = trial.suggest_int('sg_poly', 1, 4)
-    sg_deriv = trial.suggest_int('sg_deriv', 0, 2)
+    # sg_window = trial.suggest_categorical('sg_window', [5, 11, 21, 31])
+    # sg_poly = trial.suggest_int('sg_poly', 1, 4)
+    # sg_deriv = trial.suggest_int('sg_deriv', 0, 2)
     sg_enabled = trial.suggest_categorical('sg_enable', [True, False])
+    pca_enabled = trial.suggest_categorical('pca_enabled', [True, False])
+    # if sg_poly < sg_deriv:
+    #     raise optuna.exceptions.TrialPruned()
 
-    if sg_poly < sg_deriv:
-        raise optuna.exceptions.TrialPruned()
-
-    vip_comp = trial.suggest_categorical('vip_n_components', [5, 10, 15, 20, None])
-    vip_thresh = trial.suggest_float('vip_vip_threshold', 0.8, 1.1)
+    # vip_comp = trial.suggest_categorical('vip_n_components', [5, 10, 15, 20, None])
+    # vip_thresh = trial.suggest_float('vip_vip_threshold', 0.8, 1.1)
 
     preprocessor = Preprocessor(
         scatter_correction=scatter_corr,
-        baseline_correction=baseline_corr,
-        sg_window=sg_window,
-        sg_poly=sg_poly,
-        sg_deriv=sg_deriv,
+        # baseline_correction=baseline_corr,
+        # sg_window=sg_window,
+        # sg_poly=sg_poly,
+        # sg_deriv=sg_deriv,
         sg_enabled=sg_enabled,
-        continuum_removal=continuum_rem
+        # continuum_removal=continuum_rem
     )
 
     scaler = RobustScaler()
 
     vip = VIPSelector(
-        n_components=vip_comp,
-        vip_threshold=vip_thresh
+        # n_components=vip_comp,
+        # vip_threshold=vip_thresh
     )
 
     raw_pipeline = [('preprocessor', preprocessor)]
@@ -66,7 +68,13 @@ def create_common_pipeline_steps(trial):
     if enable_scaler:
         raw_pipeline.append(('scaler', scaler))
 
-    raw_pipeline.append(('vip', vip))
+    if pca_enabled:
+        pca_n_components = trial.suggest_int('pca_n_components', 2, 20)
+        pca_whiten = trial.suggest_categorical('pca_whiten', [True, False])
+        raw_pipeline.append(('PCA', PCA(n_components=pca_n_components, whiten=pca_whiten)))
+
+    if not pca_enabled:
+        raw_pipeline.append(('vip', vip))
 
     return raw_pipeline
 
@@ -121,7 +129,9 @@ def generate_data_augmentation(X_train, y_train):
     return new_X_train, new_Y_train
 
 
-def generate_mixup_augmentation(X_train, y_train, n_new_per_sample=9, alpha=0.4):
+def generate_mixup_augmentation(X_train, y_train, n_new_per_sample=9, alpha=0.4, random_seed=42):
+    rng = np.random.default_rng(random_seed)
+
     original_columns = X_train.columns
     X_orig = X_train.values
     y_orig = y_train.values
@@ -129,10 +139,10 @@ def generate_mixup_augmentation(X_train, y_train, n_new_per_sample=9, alpha=0.4)
 
     n_new_samples = n_samples * n_new_per_sample
 
-    sample_a_indices = np.random.randint(0, n_samples, n_new_samples)
-    sample_b_indices = np.random.randint(0, n_samples, n_new_samples)
+    sample_a_indices = rng.integers(0, n_samples, n_new_samples)
+    sample_b_indices = rng.integers(0, n_samples, n_new_samples)
 
-    lmbda = np.random.beta(alpha, alpha, n_new_samples).reshape(-1, 1)
+    lmbda = rng.beta(alpha, alpha, n_new_samples).reshape(-1, 1)
 
     X_aug = lmbda * X_orig[sample_a_indices] + (1 - lmbda) * X_orig[sample_b_indices]
     y_aug = lmbda.flatten() * y_orig[sample_a_indices] + (1 - lmbda.flatten()) * y_orig[sample_b_indices]
@@ -143,7 +153,8 @@ def generate_mixup_augmentation(X_train, y_train, n_new_per_sample=9, alpha=0.4)
     return pd.DataFrame(X_new, columns=original_columns), pd.Series(y_new, name='result')
 
 
-def run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination):
+def run_cv_for_trial(pipeline, trial, should_remove_outliers, allow_augmentation, n_new_per_sample, alpha,
+                     contamination=0.05):
     kf = RepeatedKFold(n_splits=5, n_repeats=1, random_state=42)
 
     scores = []
@@ -157,7 +168,8 @@ def run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination):
         if should_remove_outliers:
             X_train, y_train = remove_outliers(X_train, y_train, contamination)
 
-        X_train, y_train = generate_mixup_augmentation(X_train, y_train)
+        if allow_augmentation:
+            X_train, y_train = generate_mixup_augmentation(X_train, y_train, n_new_per_sample, alpha)
         try:
             pipeline_clone.fit(X_train, y_train)
             # plot_test_train_data(pipeline_clone, X_test, y_test, step)
@@ -185,18 +197,25 @@ def run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination):
 def objective_plsr(trial):
     pipeline_steps = create_common_pipeline_steps(trial)
 
-    n_components = trial.suggest_categorical('n_components', [5, 10, 15, 20])
+    limit = 20
+    pcaModel = [step for step in pipeline_steps if step[0] == 'PCA']
+    if pcaModel:
+        limit = pcaModel[0][1].n_components
+
+    n_components = trial.suggest_int('n_components', 1, limit)
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
-    contamination = 0.05
-    if should_remove_outliers:
-        contamination = trial.suggest_float('contamination', 0.01, 0.2)
+    # contamination = 0.05
+    # if should_remove_outliers:
+    #     contamination = trial.suggest_float('contamination', 0.01, 0.2)
     model = PLSRegression(n_components=n_components)
     pipeline_steps.append(('model', model))
 
-    pipeline = Pipeline(pipeline_steps)
+    pipeline = Pipeline(pipeline_steps, memory=memory)
 
-
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
+    allow_augmentation = trial.suggest_categorical('allow_augmentation', [True, False])
+    n_new_per_sample = trial.suggest_int('n_new_per_sample', 5, 15)
+    alpha = trial.suggest_float('n_new_per_sample', 0.2, 0.8)
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers, allow_augmentation, n_new_per_sample, alpha)
 
 
 def objective_svr(trial):
@@ -220,7 +239,7 @@ def objective_svr(trial):
     pipeline_steps.append(('model', model))
 
 
-    pipeline = Pipeline(pipeline_steps)
+    pipeline = Pipeline(pipeline_steps, memory=memory)
     return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
@@ -249,7 +268,7 @@ def objective_gbr(trial):
     pipeline_steps.append(('model', model))
 
 
-    pipeline = Pipeline(pipeline_steps)
+    pipeline = Pipeline(pipeline_steps, memory=memory)
     return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
@@ -257,9 +276,9 @@ def objective_rf(trial):
     pipeline_steps = create_common_pipeline_steps(trial)
 
     should_remove_outliers = trial.suggest_categorical('remove_outliers', [True, False])
-    contamination = 0.05
-    if should_remove_outliers:
-        contamination = trial.suggest_float('contamination', 0.01, 0.2)
+    # contamination = 0.05
+    # if should_remove_outliers:
+    #     contamination = trial.suggest_float('contamination', 0.01, 0.2)
     n_estimators = trial.suggest_categorical('n_estimators', [100, 200, 300, 500])
     max_features = trial.suggest_categorical('max_features', ['sqrt', 'log2', 0.8])
     max_depth = trial.suggest_categorical('max_depth', [10, 20, 30, None])
@@ -278,8 +297,8 @@ def objective_rf(trial):
     pipeline_steps.append(('model', model))
 
 
-    pipeline = Pipeline(pipeline_steps)
-    return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
+    pipeline = Pipeline(pipeline_steps, memory=memory)
+    return run_cv_for_trial(pipeline, trial, should_remove_outliers)
 
 
 def objective_xgb(trial):
@@ -308,48 +327,45 @@ def objective_xgb(trial):
     )
     pipeline_steps.append(('model', model))
 
-    pipeline = Pipeline(pipeline_steps)
+    pipeline = Pipeline(pipeline_steps, memory=memory)
     return run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination)
 
 
 def run_all_model_studies(n_trials_per_model=100):
     model_objectives = {
-        "PLSR": {"function": objective_plsr, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 31, 'sg_poly': 2, 'sg_deriv': 1, 'sg_enable': False, 'vip_n_components': None,
-                              'vip_vip_threshold': 0.8725998180281626, 'n_components': 5, 'remove_outliers': False,
-                              'contamination': 0.05, 'baseline_mode': None, 'enable_scaler': True}
+        "PLSR": {"function": objective_plsr, "best_knowed_parameters": {
+            'sg_enable': False, 'remove_outliers': False, 'n_components': 5, 'enable_scaler': True,
+        'pca_enabled': False, 'pca_n_components': 10, 'pca_whiten': False}
                  },
-        "SVR": {"function": objective_svr, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 5, 'sg_poly': 3, 'sg_deriv': 1,
-     'sg_enable': True, 'vip_n_components': 10, 'vip_vip_threshold': 1.0005199201746844, 'kernel': 'rbf',
-     'remove_outliers': True, 'C': 784.0639137178465, 'gamma': 0.00010631666741666417,
-                              'contamination': 0.05, 'baseline_mode': None, 'enable_scaler': True}
-                },
-        "GradientBoosting": {"function": objective_gbr, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 11,
-                              'sg_poly': 3, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 20,
-                              'vip_vip_threshold': 0.9348559509211628, 'remove_outliers': True,
+     #    "SVR": {"function": objective_svr, "best_knowed_parameters": {
+     # 'sg_enable': True, 'kernel': 'rbf',
+     # 'remove_outliers': True, 'C': 784.0639137178465, 'gamma': 0.00010631666741666417, 'enable_scaler': True,
+     #    'pca_enabled': False, 'pca_n_components': 10, 'pca_whiten': False}
+     #            },
+        "GradientBoosting": {"function": objective_gbr, "best_knowed_parameters": {'sg_enable': True, 'remove_outliers': True,
                               'n_estimators': 500, 'learning_rate': 0.05, 'max_depth': 3,
-                              'subsample': 0.9, 'max_features': 'log2', 'contamination': 0.05,
-                              'baseline_mode': None, 'enable_scaler': True}
+                              'subsample': 0.9, 'max_features': 'log2', 'enable_scaler': True,
+        'pca_enabled': False, 'pca_n_components': 10, 'pca_whiten': False}
                              },
-        "RandomForest": {"function": objective_rf, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 11,
-                              'sg_poly': 4, 'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 10,
-                              'vip_vip_threshold': 0.9241278894976066, 'remove_outliers': False,
+        "RandomForest": {"function": objective_rf, "best_knowed_parameters": {'sg_enable': True, 'remove_outliers': False,
                               'n_estimators': 100, 'max_features': 'log2', 'max_depth': 10,
-                              'min_samples_split': 5, 'min_samples_leaf': 1, 'contamination': 0.05,
-                              'baseline_mode': None, 'enable_scaler': True}
+                              'min_samples_split': 5, 'min_samples_leaf': 1, 'enable_scaler': True,
+        'pca_enabled': False, 'pca_n_components': 10, 'pca_whiten': False}
                          },
-        "XGBoost": {"function": objective_xgb, "best_knowed_parameters": {'scatter_correction': None, 'baseline_correction': None, 'sg_window': 5, 'sg_poly': 2,
-                              'sg_deriv': 1, 'sg_enable': True, 'vip_n_components': 10,
-                              'vip_vip_threshold': 0.9336065598099277, 'remove_outliers': False,
-                               'n_estimators': 300, 'learning_rate': 0.1, 'max_depth': 5, 'subsample': 0.7,
-                              'colsample_bytree': 0.7, 'gamma': 0.2, 'contamination': 0.05,
-                              'baseline_mode': None, 'enable_scaler': True}},
+        # "XGBoost": {"function": objective_xgb, "best_knowed_parameters": {'sg_enable': True,
+        #                                                                   'remove_outliers': True,
+        #                        'n_estimators': 300, 'learning_rate': 0.1, 'max_depth': 5, 'subsample': 0.7,
+        #                       'colsample_bytree': 0.7, 'gamma': 0.2, 'enable_scaler': True,
+        # 'pca_enabled': False, 'pca_n_components': 10, 'pca_whiten': False}
+        #             },
     }
+
 
     all_studies = {}
 
     for model_name, objective_func in model_objectives.items():
         print(f"Running study for {model_name}")
-        pruner = optuna.pruners.MedianPruner(n_warmup_steps=3)
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=2)
 
         study = optuna.create_study(direction='maximize', pruner=pruner)
         study.enqueue_trial(objective_func["best_knowed_parameters"])
@@ -366,26 +382,23 @@ def run_all_model_studies(n_trials_per_model=100):
 
 
 if __name__ == "__main__":
+    cachedir = './.pipeline_cache'
+    memory = Memory(cachedir, verbose=0)
     start = time.time()
     dataframe = pd.read_csv("./generated_datasets/MO_187_samples.csv", decimal='.')
     df = handle_dataset_data(dataframe)
     X_raw, y_raw = remove_y_outliers(df)
 
-    completed_studies = run_all_model_studies(n_trials_per_model=1)
+    completed_studies = run_all_model_studies(n_trials_per_model=50)
     end = time.time()
     elapsed = end - start
     print(f"Time elapsed: {elapsed}s")
-
-    #plot my predicted data vs real data
+    memory.clear(warn=False)
+    #plot my predicted data vs real data /done but maybe will be useful again
+    # try drop wavelengths at end/start again // not changed too much but maybe will be useful again
     #rfecv
-    #data augmentation
     #try both datasets again
     #spend more time in pH
-    ##take a look if the parameters of vip are impacting and if they arent cache the results
-    ##allow mix up data augmentation to be tuned
-    ##try pca
+    ##allow mix up data augmentation to be tuned //doing
     ##stacking plsr/xgboost
     ##try wavelet denoising
-    ##remove some not really useful parameters of the pipeline to find good models faster. (vip,
-    # remove baseline correction, remove sg tuning, contamination)
-    # try drop wavelengths at end/start again

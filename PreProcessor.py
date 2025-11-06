@@ -6,6 +6,7 @@ import numpy as np
 
 # Add this function alongside your other apply_... functions
 from scipy.spatial import ConvexHull
+from sklearn.decomposition import PCA
 
 
 def apply_continuum_removal(df):
@@ -91,7 +92,7 @@ def apply_savgol_to_df(df, params):
 
 class Preprocessor(BaseEstimator, TransformerMixin):
     def __init__(self, scatter_correction='snv', baseline_correction=None,
-                 sg_window=5, sg_poly=2, sg_deriv=0, sg_enabled=True,
+                 sg_window=11, sg_poly=3, sg_deriv=1, sg_enabled=True,
                  continuum_removal=False):
         self.scatter_correction = scatter_correction
         self.sg_enabled = sg_enabled
@@ -135,4 +136,5 @@ class Preprocessor(BaseEstimator, TransformerMixin):
             return X_processed
 
         X_processed = apply_savgol_to_df(X_processed, params)
+
         return X_processed
