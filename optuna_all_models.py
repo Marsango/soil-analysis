@@ -4,12 +4,14 @@ import optuna
 import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import KFold, RepeatedKFold
+from sklearn.metrics import root_mean_squared_error
 from sklearn.preprocessing import RobustScaler
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.svm import SVR
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.base import clone
 from xgboost import XGBRegressor
+import matplotlib.pyplot as plt
 
 from PreProcessor import Preprocessor
 from VIPSelector import VIPSelector
@@ -68,9 +70,81 @@ def create_common_pipeline_steps(trial):
 
     return raw_pipeline
 
+def plot_test_train_data(pipeline, X_test, y_test, fold):
+    y_pred = pipeline.predict(X_test)
+
+    plot_df = pd.DataFrame({
+        'actual': y_test.reset_index(drop=True),
+        'predicted': y_pred
+    })
+
+    plot_df_sorted = plot_df.sort_values(by='actual').reset_index(drop=True)
+
+    plt.figure(figsize=(12, 7))
+
+    plt.scatter(plot_df_sorted.index, plot_df_sorted['actual'],
+                label='Actual Test Data (Points)', color='blue', alpha=0.7, s=50)
+    plt.plot(plot_df_sorted.index, plot_df_sorted['predicted'],
+             label='Predicted Values (Line+Points)', color='red', marker='o',
+             linestyle='--', markersize=5)
+
+    plt.title('Actual vs. Predicted Values (Sorted by Actual)')
+    plt.xlabel('Sample Index (Sorted by Actual Value)')
+    plt.ylabel('Y-Value')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f'./plots/actual_vs_predicted_sorted_{pipeline.named_steps['model'].__class__.__name__}_{fold}.png')
+
+## based in this article https://arxiv.org/pdf/1710.01927
+def generate_data_augmentation(X_train, y_train):
+    new_X_train = []
+    new_Y_train = []
+    std = X_train.values.std()
+    original_columns = X_train.columns
+    for i, row in X_train.iterrows():
+        sample = row.values
+        y_val = y_train.loc[i]
+
+        new_X_train.append(sample)
+        new_Y_train.append(y_val)
+        for j in range(9):
+            offset = std * np.random.uniform(low=-0.1, high=0.1)
+            multiplier = 1 + (np.random.uniform(low=-0.1, high=0.1) * std)
+            slope_vector  = np.linspace(np.random.uniform(0.95, 1.05),
+                                                  np.random.uniform(0.95, 1.05), len(sample))
+            new_sample = (sample * multiplier * slope_vector) + offset
+            new_X_train.append(new_sample)
+            new_Y_train.append(y_val)
+
+    new_X_train = pd.DataFrame(new_X_train, columns=original_columns)
+    new_Y_train = pd.Series(new_Y_train, name='result')
+    return new_X_train, new_Y_train
+
+
+def generate_mixup_augmentation(X_train, y_train, n_new_per_sample=9, alpha=0.4):
+    original_columns = X_train.columns
+    X_orig = X_train.values
+    y_orig = y_train.values
+    n_samples = X_orig.shape[0]
+
+    n_new_samples = n_samples * n_new_per_sample
+
+    sample_a_indices = np.random.randint(0, n_samples, n_new_samples)
+    sample_b_indices = np.random.randint(0, n_samples, n_new_samples)
+
+    lmbda = np.random.beta(alpha, alpha, n_new_samples).reshape(-1, 1)
+
+    X_aug = lmbda * X_orig[sample_a_indices] + (1 - lmbda) * X_orig[sample_b_indices]
+    y_aug = lmbda.flatten() * y_orig[sample_a_indices] + (1 - lmbda.flatten()) * y_orig[sample_b_indices]
+
+    X_new = np.vstack((X_orig, X_aug))
+    y_new = np.concatenate((y_orig, y_aug))
+
+    return pd.DataFrame(X_new, columns=original_columns), pd.Series(y_new, name='result')
+
 
 def run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination):
-    kf = RepeatedKFold(n_splits=5, n_repeats=3, random_state=42)
+    kf = RepeatedKFold(n_splits=5, n_repeats=1, random_state=42)
 
     scores = []
 
@@ -83,9 +157,13 @@ def run_cv_for_trial(pipeline, trial, should_remove_outliers, contamination):
         if should_remove_outliers:
             X_train, y_train = remove_outliers(X_train, y_train, contamination)
 
+        X_train, y_train = generate_mixup_augmentation(X_train, y_train)
         try:
             pipeline_clone.fit(X_train, y_train)
-            score = pipeline_clone.score(X_test, y_test)
+            # plot_test_train_data(pipeline_clone, X_test, y_test, step)
+            # score = pipeline_clone.score(X_test, y_test)
+            y_pred = pipeline_clone.predict(X_test)
+            score = - root_mean_squared_error(y_test, y_pred)
             scores.append(score)
 
             trial.report(score, step)
@@ -271,16 +349,16 @@ def run_all_model_studies(n_trials_per_model=100):
 
     for model_name, objective_func in model_objectives.items():
         print(f"Running study for {model_name}")
-        pruner = optuna.pruners.MedianPruner(n_warmup_steps=6)
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=3)
 
         study = optuna.create_study(direction='maximize', pruner=pruner)
         study.enqueue_trial(objective_func["best_knowed_parameters"])
         study.optimize(objective_func["function"], n_trials=n_trials_per_model, show_progress_bar=True, n_jobs=-1)
         all_studies[model_name] = study
 
-        print(f"Best {model_name}  r²: {study.best_value:.4f}\n")
+        print(f"Best {model_name}  RMSE: {study.best_value:.4f}\n")
 
-    print("Best r² scores:")
+    print("Best RMSE scores:")
     for model_name, study in all_studies.items():
         print(f"  {model_name}: {study.best_value:.4f}")
         print(f"    Best Params: {study.best_params}")
@@ -293,14 +371,21 @@ if __name__ == "__main__":
     df = handle_dataset_data(dataframe)
     X_raw, y_raw = remove_y_outliers(df)
 
-    completed_studies = run_all_model_studies(n_trials_per_model=2000)
+    completed_studies = run_all_model_studies(n_trials_per_model=1)
     end = time.time()
     elapsed = end - start
     print(f"Time elapsed: {elapsed}s")
 
-
+    #plot my predicted data vs real data
     #rfecv
     #data augmentation
     #try both datasets again
     #spend more time in pH
-
+    ##take a look if the parameters of vip are impacting and if they arent cache the results
+    ##allow mix up data augmentation to be tuned
+    ##try pca
+    ##stacking plsr/xgboost
+    ##try wavelet denoising
+    ##remove some not really useful parameters of the pipeline to find good models faster. (vip,
+    # remove baseline correction, remove sg tuning, contamination)
+    # try drop wavelengths at end/start again

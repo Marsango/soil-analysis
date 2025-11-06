@@ -27,8 +27,8 @@ def handle_dataset_data(df):
     # df = df.drop(columns=columns_to_drop)
     y = df['result'].copy()
     X = df.drop('result', axis=1)
-    plot_row_graph(y, "y_raw")
-    plot_row_graph(X, "X_raw")
+    plot_Y(y, "y_raw")
+    plot_X(X, "X_raw")
     return df
 
 def remove_outliers(X, y, contamination=0.05):
@@ -46,7 +46,7 @@ def remove_outliers(X, y, contamination=0.05):
     return X_clean, y_clean
 
 
-def plot_row_graph(df, name):
+def plot_X(df, name):
     plt.figure(figsize=(10, 5))
     if isinstance(df, DataFrame):
         for i, row in df.iterrows():
@@ -57,6 +57,18 @@ def plot_row_graph(df, name):
     plt.xlabel('Column index')
     plt.ylabel('Value')
     plt.title('Each Row of NumPy Array as a Line')
+    plt.savefig(f"{name}.png", dpi=300)
+
+def plot_Y(df, name):
+    y_sorted = np.sort(df)
+    x_indices = np.arange(len(y_sorted))
+    plt.figure(figsize=(10, 6))
+
+    plt.scatter(x_indices, y_sorted)
+    plt.title('Sorted Y-Values Plot')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Y-Value')
+    plt.grid(True)
     plt.savefig(f"{name}.png", dpi=300)
 
 
@@ -294,12 +306,13 @@ def xgb_tuning(inner_cv):
     return search
 
 def remove_y_outliers(df):
-    q_low = df['result'].quantile(0.025)
-    q_high = df['result'].quantile(0.975)
+    q_low = df['result'].quantile(0.05)
+    q_high = df['result'].quantile(0.95)
 
     df = df[(df['result'] >= q_low) & (df['result'] <= q_high)]
     y = df['result'].copy()
     X = df.drop('result', axis=1)
+    plot_Y(y, "y_raw_no_outliers")
     return X, y
 
 
