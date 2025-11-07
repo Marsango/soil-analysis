@@ -4,7 +4,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 import pandas as pd
 import numpy as np
 
-# Add this function alongside your other apply_... functions
 from scipy.spatial import ConvexHull
 from sklearn.decomposition import PCA
 
@@ -91,7 +90,7 @@ def apply_savgol_to_df(df, params):
     return pd.DataFrame(filtered, columns=df.columns, index=df.index)
 
 class Preprocessor(BaseEstimator, TransformerMixin):
-    def __init__(self, scatter_correction='snv', baseline_correction=None,
+    def __init__(self, scatter_correction=None, baseline_correction=None,
                  sg_window=11, sg_poly=3, sg_deriv=1, sg_enabled=True,
                  continuum_removal=False):
         self.scatter_correction = scatter_correction

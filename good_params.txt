@@ -59,3 +59,27 @@ Best RMSE scores:
   XGBoost: -8.9961
     Best Params: {'scatter_correction': None, 'sg_enable': True, 'enable_scaler': True, 'remove_outliers': False, 'n_estimators': 300, 'learning_rate': 0.1, 'max_depth': 5, 'subsample': 0.7, 'colsample_bytree': 0.7, 'gamma': 0.2}
 Time elapsed: 464.5522201061249s
+
+
+VIP -> PCA
+Best RMSE scores:
+  SVR: -9.3387
+    Best Params: {'scatter_correction': None, 'sg_enable': False, 'pca_enabled': False, 'enable_scaler': True, 'kernel': 'linear', 'remove_outliers': False, 'C': 1.7223659859163993, 'allow_augmentation': True, 'n_new_per_sample': 9, 'alpha': 0.2830808828791628}
+  GradientBoosting: -8.5115
+    Best Params: {'scatter_correction': None, 'sg_enable': True, 'pca_enabled': False, 'enable_scaler': False, 'remove_outliers': True, 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 5, 'subsample': 0.7, 'max_features': None, 'allow_augmentation': False, 'n_new_per_sample': 12, 'alpha': 0.26880443755160216}
+  RandomForest: -8.5011
+    Best Params: {'scatter_correction': None, 'sg_enable': True, 'pca_enabled': False, 'enable_scaler': True, 'remove_outliers': False, 'n_estimators': 100, 'max_features': 0.8, 'max_depth': 10, 'min_samples_split': 2, 'min_samples_leaf': 1, 'allow_augmentation': True, 'n_new_per_sample': 15, 'alpha': 0.20642068905944333}
+
+
+PCA -> VIP
+
+Best RMSE scores:
+  SVR: -8.8544
+    Best Params: {'scatter_correction': None, 'sg_enable': False, 'pca_enabled': False, 'enable_scaler': True, 'kernel': 'linear', 'remove_outliers': False, 'C': 12.17552345056831, 'allow_augmentation': True, 'n_new_per_sample': 12, 'alpha': 0.5831134098250803}
+  GradientBoosting: -8.5966
+    Best Params: {'scatter_correction': None, 'sg_enable': True, 'pca_enabled': False, 'enable_scaler': True, 'remove_outliers': True, 'n_estimators': 500, 'learning_rate': 0.1, 'max_depth': 8, 'subsample': 0.9, 'max_features': 'log2', 'allow_augmentation': True, 'n_new_per_sample': 10, 'alpha': 0.6390857864795467}
+  RandomForest: -8.6079
+    Best Params: {'scatter_correction': None, 'sg_enable': True, 'pca_enabled': False, 'enable_scaler': True, 'remove_outliers': False, 'n_estimators': 300, 'max_features': 0.8, 'max_depth': 20, 'min_samples_split': 5, 'min_samples_leaf': 2, 'allow_augmentation': False, 'n_new_per_sample': 12, 'alpha': 0.7877570077485219}
+Time elapsed: 489.9042856693268s
+
+
